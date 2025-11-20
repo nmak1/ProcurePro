@@ -1,14 +1,20 @@
 import os
+import sys
 from pathlib import Path
 from decouple import config
 
+# Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = config('SECRET_KEY', default='django-insecure-change-in-production')
+# Добавляем apps в Python path
+sys.path.insert(0, os.path.join(BASE_DIR, 'apps'))
+
+SECRET_KEY = config('SECRET_KEY', default='django-insecure-change-this-in-production')
 DEBUG = config('DEBUG', default=True, cast=bool)
 
 ALLOWED_HOSTS = ['*']
 
+# Application definition
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -24,13 +30,13 @@ INSTALLED_APPS = [
     'corsheaders',
     'django_celery_beat',
 
-    # Local apps
-    'apps.users',
-    'apps.products',
-    'apps.suppliers',
-    'apps.orders',
-    'apps.cart',
-    'apps.core',
+    # Local apps - теперь используем правильные пути
+    'users',
+    'products',
+    'suppliers',
+    'orders',
+    'cart',
+    'core',
 ]
 
 MIDDLEWARE = [

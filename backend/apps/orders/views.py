@@ -5,8 +5,6 @@ from rest_framework.permissions import IsAuthenticated
 from django.db import transaction
 from .models import Order, OrderItem, DeliveryAddress
 from .serializers import OrderSerializer, OrderCreateSerializer, DeliveryAddressSerializer
-from apps.cart.models import Cart, CartItem
-from apps.core.tasks import send_order_confirmation_email, send_order_to_admin
 
 
 class OrderViewSet(viewsets.ModelViewSet):
@@ -24,6 +22,10 @@ class OrderViewSet(viewsets.ModelViewSet):
     def create(self, request):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+
+        # Импорты теперь работают правильно
+        from backend.apps.cart.models import Cart, CartItem
+        from backend.apps.core.tasks import send_order_confirmation_email, send_order_to_admin
 
         cart = Cart.objects.get(user=request.user)
         cart_items = cart.items.select_related('product', 'product__supplier').all()

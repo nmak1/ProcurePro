@@ -27,7 +27,8 @@ class CartViewSet(viewsets.ModelViewSet):
         quantity = serializer.validated_data['quantity']
 
         try:
-            from apps.products.models import Product
+            # Теперь импорт работает правильно
+            from backend.apps.products.models import Product
             product = Product.objects.get(id=product_id, is_available=True)
         except Product.DoesNotExist:
             return Response(

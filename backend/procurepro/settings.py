@@ -31,12 +31,12 @@ INSTALLED_APPS = [
     'django_celery_beat',
 
     # Local apps - теперь используем правильные пути
-    'users',
-    'products',
-    'suppliers',
-    'orders',
-    'cart',
-    'core',
+    'apps.users',
+    'apps.products',
+    'apps.suppliers',
+    'apps.orders',
+    'apps.cart',
+    'apps.core',
 ]
 
 MIDDLEWARE = [

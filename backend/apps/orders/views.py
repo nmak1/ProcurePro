@@ -23,7 +23,7 @@ class OrderViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        # Импорты теперь работают правильно
+        # Импорты внутри метода чтобы избежать циклических импортов
         from backend.apps.cart.models import Cart, CartItem
         from backend.apps.core.tasks import send_order_confirmation_email, send_order_to_admin
 
@@ -33,6 +33,18 @@ class OrderViewSet(viewsets.ModelViewSet):
         if not cart_items:
             return Response(
                 {'error': 'Cart is empty'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Проверяем доступность товаров
+        unavailable_products = []
+        for cart_item in cart_items:
+            if not cart_item.product.is_available:
+                unavailable_products.append(cart_item.product.name)
+
+        if unavailable_products:
+            return Response(
+                {'error': f'Some products are not available: {", ".join(unavailable_products)}'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -48,9 +60,6 @@ class OrderViewSet(viewsets.ModelViewSet):
 
         for cart_item in cart_items:
             product = cart_item.product
-
-            if not product.is_available:
-                continue
 
             order_item = OrderItem(
                 order=order,
@@ -78,6 +87,25 @@ class OrderViewSet(viewsets.ModelViewSet):
             status=status.HTTP_201_CREATED
         )
 
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        """Отмена заказа"""
+        order = self.get_object()
+
+        if order.status not in ['pending', 'confirmed']:
+            return Response(
+                {'error': 'Order cannot be cancelled in its current status'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        order.status = 'cancelled'
+        order.save()
+
+        return Response({
+            'message': 'Order cancelled successfully',
+            'status': order.status
+        })
+
 
 class DeliveryAddressViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
@@ -88,3 +116,17 @@ class DeliveryAddressViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
+
+    @action(detail=True, methods=['post'])
+    def set_default(self, request, pk=None):
+        """Установка адреса по умолчанию"""
+        address = self.get_object()
+
+        # Сбрасываем все адреса по умолчанию
+        DeliveryAddress.objects.filter(user=request.user, is_default=True).update(is_default=False)
+
+        # Устанавливаем текущий адрес как default
+        address.is_default = True
+        address.save()
+
+        return Response({'message': 'Default address updated successfully'})

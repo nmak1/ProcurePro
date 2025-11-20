@@ -38,6 +38,7 @@ class UserProfileView(generics.RetrieveUpdateAPIView):
 @permission_classes([permissions.AllowAny])
 def login_view(request):
     from django.contrib.auth import authenticate
+
     email = request.data.get('email')
     password = request.data.get('password')
 
@@ -49,3 +50,15 @@ def login_view(request):
             'token': token.key
         })
     return Response({'error': 'Invalid credentials'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def logout_view(request):
+    try:
+        # Удаляем токен пользователя
+        request.user.auth_token.delete()
+    except:
+        pass
+
+    return Response({'message': 'Successfully logged out'})

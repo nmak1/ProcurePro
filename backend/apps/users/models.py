@@ -12,7 +12,7 @@ class User(AbstractUser):
 
 
 class UserProfile(models.Model):
-    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
+    user = models.OneToOneField('User', on_delete=models.CASCADE, related_name='profile')
     phone = models.CharField(max_length=20, blank=True)
     company_name = models.CharField(max_length=255, blank=True)
     address = models.TextField(blank=True)

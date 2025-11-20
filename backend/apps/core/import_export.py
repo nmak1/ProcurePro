@@ -147,3 +147,130 @@ class ProductImporter:
                     name=char_data['name'],
                     value=char_data['value']
                 )
+
+
+class ProductExporter:
+    """Класс для экспорта товаров"""
+
+    def export_to_yaml(self, file_path):
+        """Экспорт всех товаров в YAML файл"""
+        try:
+            suppliers = Supplier.objects.prefetch_related(
+                'products__category',
+                'products__characteristics'
+            ).filter(is_active=True)
+
+            export_data = {'suppliers': []}
+
+            for supplier in suppliers:
+                supplier_data = {
+                    'name': supplier.name,
+                    'type': supplier.type,
+                    'email': supplier.email,
+                    'phone': supplier.phone,
+                    'address': supplier.address,
+                    'is_active': supplier.is_active,
+                    'accepts_orders': supplier.accepts_orders,
+                    'products': []
+                }
+
+                products = supplier.products.filter(is_available=True)
+
+                for product in products:
+                    product_data = {
+                        'name': product.name,
+                        'description': product.description,
+                        'category': product.category.name,
+                        'price': float(product.price),
+                        'min_order_quantity': product.min_order_quantity,
+                        'max_order_quantity': product.max_order_quantity,
+                        'is_available': product.is_available,
+                        'characteristics': []
+                    }
+
+                    # Добавляем характеристики
+                    for char in product.characteristics.all():
+                        product_data['characteristics'].append({
+                            'name': char.name,
+                            'value': char.value
+                        })
+
+                    supplier_data['products'].append(product_data)
+
+                export_data['suppliers'].append(supplier_data)
+
+            # Создаем директорию если не существует
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+            # Сохраняем в файл
+            with open(file_path, 'w', encoding='utf-8') as file:
+                yaml.dump(export_data, file, allow_unicode=True, default_flow_style=False, indent=2)
+
+            return {
+                'exported_suppliers': len(export_data['suppliers']),
+                'exported_products': sum(len(supplier['products']) for supplier in export_data['suppliers']),
+                'file_path': file_path
+            }
+
+        except Exception as e:
+            raise Exception(f"Export failed: {str(e)}")
+
+    def export_supplier_products(self, supplier_id, file_path):
+        """Экспорт товаров конкретного поставщика"""
+        try:
+            supplier = Supplier.objects.prefetch_related(
+                'products__category',
+                'products__characteristics'
+            ).get(id=supplier_id)
+
+            export_data = {
+                'suppliers': [{
+                    'name': supplier.name,
+                    'type': supplier.type,
+                    'email': supplier.email,
+                    'phone': supplier.phone,
+                    'address': supplier.address,
+                    'is_active': supplier.is_active,
+                    'accepts_orders': supplier.accepts_orders,
+                    'products': []
+                }]
+            }
+
+            products = supplier.products.filter(is_available=True)
+
+            for product in products:
+                product_data = {
+                    'name': product.name,
+                    'description': product.description,
+                    'category': product.category.name,
+                    'price': float(product.price),
+                    'min_order_quantity': product.min_order_quantity,
+                    'max_order_quantity': product.max_order_quantity,
+                    'is_available': product.is_available,
+                    'characteristics': []
+                }
+
+                # Добавляем характеристики
+                for char in product.characteristics.all():
+                    product_data['characteristics'].append({
+                        'name': char.name,
+                        'value': char.value
+                    })
+
+                export_data['suppliers'][0]['products'].append(product_data)
+
+            # Создаем директорию если не существует
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+            # Сохраняем в файл
+            with open(file_path, 'w', encoding='utf-8') as file:
+                yaml.dump(export_data, file, allow_unicode=True, default_flow_style=False, indent=2)
+
+            return {
+                'exported_suppliers': 1,
+                'exported_products': len(export_data['suppliers'][0]['products']),
+                'file_path': file_path
+            }
+
+        except Exception as e:
+            raise Exception(f"Supplier export failed: {str(e)}")

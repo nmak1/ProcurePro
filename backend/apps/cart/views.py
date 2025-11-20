@@ -27,13 +27,19 @@ class CartViewSet(viewsets.ModelViewSet):
         quantity = serializer.validated_data['quantity']
 
         try:
-            # Теперь импорт работает правильно
             from backend.apps.products.models import Product
             product = Product.objects.get(id=product_id, is_available=True)
         except Product.DoesNotExist:
             return Response(
                 {'error': 'Product not found or not available'},
                 status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Проверяем максимальное количество
+        if quantity > product.max_order_quantity:
+            return Response(
+                {'error': f'Maximum order quantity is {product.max_order_quantity}'},
+                status=status.HTTP_400_BAD_REQUEST
             )
 
         cart_item, created = CartItem.objects.get_or_create(
@@ -43,7 +49,13 @@ class CartViewSet(viewsets.ModelViewSet):
         )
 
         if not created:
-            cart_item.quantity += quantity
+            new_quantity = cart_item.quantity + quantity
+            if new_quantity > product.max_order_quantity:
+                return Response(
+                    {'error': f'Total quantity would exceed maximum of {product.max_order_quantity}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            cart_item.quantity = new_quantity
             cart_item.save()
 
         return Response(CartSerializer(cart).data)
@@ -67,3 +79,37 @@ class CartViewSet(viewsets.ModelViewSet):
         cart = self.get_object()
         cart.items.all().delete()
         return Response({'message': 'Cart cleared'})
+
+    @action(detail=False, methods=['post'])
+    def update_quantity(self, request, item_id=None):
+        cart = self.get_object()
+
+        try:
+            cart_item = CartItem.objects.get(id=item_id, cart=cart)
+            serializer = UpdateCartItemSerializer(cart_item, data=request.data)
+            serializer.is_valid(raise_exception=True)
+
+            quantity = serializer.validated_data['quantity']
+
+            # Проверяем максимальное количество
+            if quantity > cart_item.product.max_order_quantity:
+                return Response(
+                    {'error': f'Maximum order quantity is {cart_item.product.max_order_quantity}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Проверяем минимальное количество
+            if quantity < cart_item.product.min_order_quantity:
+                return Response(
+                    {'error': f'Minimum order quantity is {cart_item.product.min_order_quantity}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            serializer.save()
+            return Response(CartSerializer(cart).data)
+
+        except CartItem.DoesNotExist:
+            return Response(
+                {'error': 'Item not found in cart'},
+                status=status.HTTP_404_NOT_FOUND
+            )

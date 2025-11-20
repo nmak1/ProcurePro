@@ -1,8 +1,6 @@
 import uuid
 from django.db import models
-from django.contrib.auth import get_user_model
-
-User = get_user_model()
+from django.conf import settings
 
 
 class Order(models.Model):
@@ -15,7 +13,7 @@ class Order(models.Model):
         ('cancelled', 'Cancelled'),
     ]
 
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='orders')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='orders')
     order_number = models.CharField(max_length=20, unique=True, editable=False)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
@@ -23,6 +21,9 @@ class Order(models.Model):
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        app_label = 'orders'
 
     def save(self, *args, **kwargs):
         if not self.order_number:
@@ -35,11 +36,14 @@ class Order(models.Model):
 
 class OrderItem(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='items')
-    product = models.ForeignKey('products.Product', on_delete=models.CASCADE)  # Строковая ссылка
-    supplier = models.ForeignKey('suppliers.Supplier', on_delete=models.CASCADE)  # Строковая ссылка
+    product = models.ForeignKey('products.Product', on_delete=models.CASCADE)
+    supplier = models.ForeignKey('suppliers.Supplier', on_delete=models.CASCADE)
     quantity = models.PositiveIntegerField()
     unit_price = models.DecimalField(max_digits=10, decimal_places=2)
     total_price = models.DecimalField(max_digits=10, decimal_places=2)
+
+    class Meta:
+        app_label = 'orders'
 
     def save(self, *args, **kwargs):
         self.total_price = self.quantity * self.unit_price
@@ -50,7 +54,7 @@ class OrderItem(models.Model):
 
 
 class DeliveryAddress(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='delivery_addresses')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='delivery_addresses')
     address = models.TextField()
     city = models.CharField(max_length=100)
     postal_code = models.CharField(max_length=20)
@@ -58,6 +62,7 @@ class DeliveryAddress(models.Model):
     is_default = models.BooleanField(default=False)
 
     class Meta:
+        app_label = 'orders'
         verbose_name_plural = "Delivery Addresses"
 
     def __str__(self):

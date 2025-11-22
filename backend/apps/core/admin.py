@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import (
+from apps.core.models import (
     SystemSettings, ImportJob, ExportJob, EmailTemplate,
     SystemLog, BackupSchedule, BackupRecord, APIRequestLog,
     Notification, SystemHealthCheck
@@ -63,7 +63,6 @@ class SystemLogAdmin(admin.ModelAdmin):
 
     def message_short(self, obj):
         return obj.message[:100] + '...' if len(obj.message) > 100 else obj.message
-
     message_short.short_description = 'Message'
 
 
@@ -84,7 +83,6 @@ class BackupRecordAdmin(admin.ModelAdmin):
         if obj.file_size:
             return f"{obj.file_size / (1024 * 1024):.2f} MB"
         return "N/A"
-
     file_size_mb.short_description = 'File Size'
 
 
@@ -97,7 +95,6 @@ class APIRequestLogAdmin(admin.ModelAdmin):
 
     def path_short(self, obj):
         return obj.path[:50] + '...' if len(obj.path) > 50 else obj.path
-
     path_short.short_description = 'Path'
 
 

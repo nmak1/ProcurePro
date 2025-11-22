@@ -1,6 +1,8 @@
 from celery import shared_task
+from django.apps import apps
 from django.core.mail import send_mail
 from django.conf import settings
+from django.db import models  # ДОБАВЛЕНО: импорт models
 
 
 @shared_task(bind=True)
@@ -14,26 +16,27 @@ def debug_task(self):
 def send_order_confirmation_email(order_id):
     """Отправка email подтверждения заказа клиенту"""
     try:
-        from backend.apps.orders.models import Order
+        # ИСПРАВЛЕНО: используем apps.get_model вместо импорта
+        Order = apps.get_model('orders', 'Order')
         order = Order.objects.select_related('user').prefetch_related('items').get(id=order_id)
 
-        subject = f'Order Confirmation - #{order.order_number}'
+        subject = f'Подтверждение заказа - #{order.id}'
         message = f"""
-        Dear {order.user.first_name or order.user.username},
+        Уважаемый(ая) {order.user.first_name or order.user.username},
 
-        Thank you for your order! Here are your order details:
+        Благодарим за ваш заказ! Детали заказа:
 
-        Order Number: {order.order_number}
-        Total Amount: ${order.total_amount}
-        Delivery Address: {order.delivery_address}
+        Номер заказа: #{order.id}
+        Общая сумма: {order.total_amount} руб.
+        Адрес доставки: {order.shipping_address}
 
-        Order Items:
+        Состав заказа:
         """
 
         for item in order.items.all():
-            message += f"\n- {item.product.name} x {item.quantity}: ${item.total_price}"
+            message += f"\n- {item.product.name} x {item.quantity}: {item.total_price} руб."
 
-        message += "\n\nWe will notify you when your order ships."
+        message += "\n\nМы уведомим вас, когда заказ будет отправлен."
 
         send_mail(
             subject=subject,
@@ -43,49 +46,55 @@ def send_order_confirmation_email(order_id):
             fail_silently=False,
         )
 
-        return f"Confirmation email sent for order #{order.order_number}"
+        return f"Письмо с подтверждением отправлено для заказа #{order.id}"
 
     except Exception as e:
-        return f"Error sending confirmation email: {str(e)}"
+        return f"Ошибка отправки письма с подтверждением: {str(e)}"
 
 
 @shared_task
 def send_order_to_admin(order_id):
     """Отправка уведомления о новом заказе администратору"""
     try:
-        from backend.apps.orders.models import Order
+        # ИСПРАВЛЕНО: используем apps.get_model вместо импорта
+        Order = apps.get_model('orders', 'Order')
         order = Order.objects.select_related('user').prefetch_related('items').get(id=order_id)
 
-        subject = f'New Order Received - #{order.order_number}'
+        subject = f'Новый заказ - #{order.id}'
         message = f"""
-        New order received:
+        Поступил новый заказ:
 
-        Order Number: {order.order_number}
-        Customer: {order.user.email}
-        Total Amount: ${order.total_amount}
-        Delivery Address: {order.delivery_address}
+        Номер заказа: #{order.id}
+        Клиент: {order.user.email}
+        Общая сумма: {order.total_amount} руб.
+        Адрес доставки: {order.shipping_address}
 
-        Order Items:
+        Состав заказа:
         """
 
         for item in order.items.all():
-            message += f"\n- {item.product.name} x {item.quantity}: ${item.total_price} (Supplier: {item.supplier.name})"
+            message += f"\n- {item.product.name} x {item.quantity}: {item.total_price} руб."
 
-        # В реальном приложении здесь должен быть email администратора
-        admin_email = getattr(settings, 'ADMIN_EMAIL', 'admin@example.com')
+        # Получаем email администраторов
+        User = apps.get_model('users', 'User')
+        admin_emails = User.objects.filter(
+            user_type='admin',
+            is_active=True
+        ).values_list('email', flat=True)
 
-        send_mail(
-            subject=subject,
-            message=message,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[admin_email],
-            fail_silently=False,
-        )
+        if admin_emails:
+            send_mail(
+                subject=subject,
+                message=message,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=list(admin_emails),
+                fail_silently=False,
+            )
 
-        return f"Admin notification sent for order #{order.order_number}"
+        return f"Уведомление администратору отправлено для заказа #{order.id}"
 
     except Exception as e:
-        return f"Error sending admin notification: {str(e)}"
+        return f"Ошибка отправки уведомления администратору: {str(e)}"
 
 
 @shared_task
@@ -94,17 +103,17 @@ def import_products_task(file_path):
     try:
         from .import_export import ProductImporter
         importer = ProductImporter()
-        result = importer.import_from_yaml(file_path)
+        result = importer.import_from_file(file_path)
         return {
             'status': 'success',
             'result': result,
-            'message': f"Import completed: {result['created']} created, {result['updated']} updated, {result['errors']} errors"
+            'message': 'Импорт завершен успешно'
         }
     except Exception as e:
         return {
             'status': 'error',
             'error': str(e),
-            'message': f"Import failed: {str(e)}"
+            'message': f"Ошибка импорта: {str(e)}"
         }
 
 
@@ -118,13 +127,13 @@ def export_products_task(file_path):
         return {
             'status': 'success',
             'result': result,
-            'message': 'Export completed successfully'
+            'message': 'Экспорт завершен успешно'
         }
     except Exception as e:
         return {
             'status': 'error',
             'error': str(e),
-            'message': f"Export failed: {str(e)}"
+            'message': f"Ошибка экспорта: {str(e)}"
         }
 
 
@@ -132,9 +141,7 @@ def export_products_task(file_path):
 def send_notification_email(user_id, subject, message):
     """Отправка уведомления по email"""
     try:
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
-
+        User = apps.get_model('users', 'User')
         user = User.objects.get(id=user_id)
 
         send_mail(
@@ -145,10 +152,10 @@ def send_notification_email(user_id, subject, message):
             fail_silently=False,
         )
 
-        return f"Notification email sent to {user.email}"
+        return f"Уведомление отправлено на {user.email}"
 
     except Exception as e:
-        return f"Error sending notification email: {str(e)}"
+        return f"Ошибка отправки уведомления: {str(e)}"
 
 
 @shared_task
@@ -157,7 +164,6 @@ def cleanup_old_files_task(days_old=7):
     import os
     import glob
     from datetime import datetime, timedelta
-    from django.conf import settings
 
     try:
         import_dir = os.path.join(settings.MEDIA_ROOT, 'imports')
@@ -203,14 +209,14 @@ def cleanup_old_files_task(days_old=7):
             'error_files': error_files,
             'total_deleted': len(deleted_files),
             'total_errors': len(error_files),
-            'message': f"Cleanup completed: {len(deleted_files)} files deleted, {len(error_files)} errors"
+            'message': f"Очистка завершена: {len(deleted_files)} файлов удалено, {len(error_files)} ошибок"
         }
 
     except Exception as e:
         return {
             'status': 'error',
             'error': str(e),
-            'message': f"Cleanup failed: {str(e)}"
+            'message': f"Ошибка очистки: {str(e)}"
         }
 
 
@@ -218,9 +224,7 @@ def cleanup_old_files_task(days_old=7):
 def generate_backup_task(backup_type='database'):
     """Создание резервной копии"""
     import os
-    import subprocess
     from datetime import datetime
-    from django.conf import settings
 
     try:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -241,7 +245,7 @@ def generate_backup_task(backup_type='database'):
                 'status': 'success',
                 'backup_path': backup_path,
                 'backup_type': 'database',
-                'message': 'Database backup created successfully'
+                'message': 'Резервная копия базы данных создана успешно'
             }
 
         elif backup_type == 'media':
@@ -260,12 +264,130 @@ def generate_backup_task(backup_type='database'):
                 'status': 'success',
                 'backup_path': media_backup_path,
                 'backup_type': 'media',
-                'message': 'Media files backup created successfully'
+                'message': 'Резервная копия медиа файлов создана успешно'
             }
 
     except Exception as e:
         return {
             'status': 'error',
             'error': str(e),
-            'message': f"Backup failed: {str(e)}"
+            'message': f"Ошибка создания резервной копии: {str(e)}"
+        }
+
+
+@shared_task
+def update_product_availability():
+    """Периодическая задача для обновления доступности товаров"""
+    try:
+        Product = apps.get_model('products', 'Product')
+
+        # Находим товары, которые должны быть недоступны
+        products_to_disable = Product.objects.filter(
+            quantity__lt=models.F('min_quantity'),  # ТЕПЕРЬ models импортирован
+            is_available=True
+        )
+
+        disabled_count = products_to_disable.update(is_available=False)
+
+        # Находим товары, которые должны быть доступны
+        products_to_enable = Product.objects.filter(
+            quantity__gte=models.F('min_quantity'),  # ТЕПЕРЬ models импортирован
+            is_available=False
+        )
+
+        enabled_count = products_to_enable.update(is_available=True)
+
+        return {
+            'status': 'success',
+            'disabled_count': disabled_count,
+            'enabled_count': enabled_count,
+            'message': f'Обновлено доступности: отключено {disabled_count}, включено {enabled_count} товаров'
+        }
+
+    except Exception as e:
+        return {
+            'status': 'error',
+            'error': str(e),
+            'message': f'Ошибка обновления доступности товаров: {str(e)}'
+        }
+
+
+@shared_task
+def send_daily_sales_report():
+    """Ежедневный отчет о продажах"""
+    try:
+        from datetime import datetime, timedelta
+        Order = apps.get_model('orders', 'Order')
+        OrderItem = apps.get_model('orders', 'OrderItem')
+
+        # Данные за последние 24 часа
+        yesterday = datetime.now() - timedelta(days=1)
+
+        # Статистика заказов
+        total_orders = Order.objects.filter(created_at__gte=yesterday).count()
+        completed_orders = Order.objects.filter(
+            created_at__gte=yesterday,
+            status='delivered'
+        ).count()
+
+        # Сумма продаж
+        total_sales = Order.objects.filter(
+            created_at__gte=yesterday,
+            status__in=['confirmed', 'processing', 'shipped', 'delivered']
+        ).aggregate(total=models.Sum('total_amount'))['total'] or 0
+
+        # Популярные товары
+        popular_products = OrderItem.objects.filter(
+            order__created_at__gte=yesterday
+        ).values(
+            'product__name'
+        ).annotate(
+            total_sold=models.Sum('quantity')
+        ).order_by('-total_sold')[:5]
+
+        # Формируем отчет
+        subject = f'Ежедневный отчет о продажах - {datetime.now().strftime("%d.%m.%Y")}'
+        message = f"""
+        Ежедневный отчет о продажах:
+
+        Период: последние 24 часа
+        Всего заказов: {total_orders}
+        Завершенных заказов: {completed_orders}
+        Общая сумма продаж: {total_sales} руб.
+
+        Популярные товары:
+        """
+
+        for product in popular_products:
+            message += f"\n- {product['product__name']}: {product['total_sold']} шт."
+
+        # Отправляем администраторам
+        User = apps.get_model('users', 'User')
+        admin_emails = User.objects.filter(
+            user_type='admin',
+            is_active=True
+        ).values_list('email', flat=True)
+
+        if admin_emails:
+            send_mail(
+                subject=subject,
+                message=message,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=list(admin_emails),
+                fail_silently=False,
+            )
+
+        return {
+            'status': 'success',
+            'total_orders': total_orders,
+            'completed_orders': completed_orders,
+            'total_sales': total_sales,
+            'message': 'Ежедневный отчет отправлен'
+        }
+
+    except Exception as e:
+        return {
+            'status': 'error',
+            'error': str(e),
+            'message': f'Ошибка отправки ежедневного отчета: {str(e)}'
         }

@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.utils import timezone
-from .models import (
+from apps.core.models import (
     SystemSettings, ImportJob, ExportJob, EmailTemplate,
     SystemLog, BackupSchedule, BackupRecord, APIRequestLog,
     Notification, SystemHealthCheck

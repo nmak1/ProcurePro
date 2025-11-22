@@ -2,114 +2,136 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from .models import Cart, CartItem
-from .serializers import CartSerializer, CartItemSerializer, AddToCartSerializer, UpdateCartItemSerializer
+from rest_framework.views import APIView
+from django.shortcuts import get_object_or_404
+from apps.cart.models import Cart, CartItem
+from apps.cart.serializers import (
+    CartSerializer,
+    CartItemSerializer,
+    AddToCartSerializer,
+    UpdateCartItemSerializer
+)
 
 
 class CartViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAuthenticated]
     serializer_class = CartSerializer
+    permission_classes = [IsAuthenticated]
+    http_method_names = ['get', 'post', 'head', 'options']
 
     def get_queryset(self):
-        return Cart.objects.filter(user=self.request.user)
+        return Cart.objects.filter(user=self.request.user).with_totals()
 
     def get_object(self):
+        """Получить или создать корзину пользователя"""
         cart, created = Cart.objects.get_or_create(user=self.request.user)
         return cart
 
-    @action(detail=False, methods=['post'])
-    def add_item(self, request):
-        serializer = AddToCartSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
+    def list(self, request, *args, **kwargs):
+        """Получить корзину пользователя"""
         cart = self.get_object()
-        product_id = serializer.validated_data['product_id']
-        quantity = serializer.validated_data['quantity']
-
-        try:
-            from backend.apps.products.models import Product
-            product = Product.objects.get(id=product_id, is_available=True)
-        except Product.DoesNotExist:
-            return Response(
-                {'error': 'Product not found or not available'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-
-        # Проверяем максимальное количество
-        if quantity > product.max_order_quantity:
-            return Response(
-                {'error': f'Maximum order quantity is {product.max_order_quantity}'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        cart_item, created = CartItem.objects.get_or_create(
-            cart=cart,
-            product=product,
-            defaults={'quantity': quantity}
-        )
-
-        if not created:
-            new_quantity = cart_item.quantity + quantity
-            if new_quantity > product.max_order_quantity:
-                return Response(
-                    {'error': f'Total quantity would exceed maximum of {product.max_order_quantity}'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            cart_item.quantity = new_quantity
-            cart_item.save()
-
-        return Response(CartSerializer(cart).data)
-
-    @action(detail=False, methods=['delete'])
-    def remove_item(self, request, item_id=None):
-        cart = self.get_object()
-
-        try:
-            cart_item = CartItem.objects.get(id=item_id, cart=cart)
-            cart_item.delete()
-            return Response({'message': 'Item removed from cart'})
-        except CartItem.DoesNotExist:
-            return Response(
-                {'error': 'Item not found in cart'},
-                status=status.HTTP_404_NOT_FOUND
-            )
+        serializer = self.get_serializer(cart)
+        return Response(serializer.data)
 
     @action(detail=False, methods=['post'])
     def clear(self, request):
+        """Очистить корзину"""
         cart = self.get_object()
-        cart.items.all().delete()
-        return Response({'message': 'Cart cleared'})
+        cart.clear()
+        return Response(
+            {'detail': 'Корзина очищена'},
+            status=status.HTTP_200_OK
+        )
 
-    @action(detail=False, methods=['post'])
-    def update_quantity(self, request, item_id=None):
+    @action(detail=False, methods=['get'])
+    def summary(self, request):
+        """Краткая информация о корзине"""
         cart = self.get_object()
+        return Response({
+            'total_items': cart.total_items,
+            'total_amount': cart.total_amount,
+            'is_empty': cart.is_empty()
+        })
 
-        try:
-            cart_item = CartItem.objects.get(id=item_id, cart=cart)
-            serializer = UpdateCartItemSerializer(cart_item, data=request.data)
-            serializer.is_valid(raise_exception=True)
 
+class AddToCartView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = AddToCartSerializer(data=request.data)
+        if serializer.is_valid():
+            product_id = serializer.validated_data['product_id']
             quantity = serializer.validated_data['quantity']
 
-            # Проверяем максимальное количество
-            if quantity > cart_item.product.max_order_quantity:
+            from apps.products.models import Product  # ← ИЗМЕНИТЕ ИМПОРТ
+            product = get_object_or_404(Product, id=product_id, is_available=True)
+
+            # Проверка доступного количества
+            if product.quantity < quantity:
                 return Response(
-                    {'error': f'Maximum order quantity is {cart_item.product.max_order_quantity}'},
+                    {
+                        'error': 'Недостаточно товара на складе',
+                        'available_quantity': product.quantity
+                    },
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # Проверяем минимальное количество
-            if quantity < cart_item.product.min_order_quantity:
-                return Response(
-                    {'error': f'Minimum order quantity is {cart_item.product.min_order_quantity}'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+            cart, created = Cart.objects.get_or_create(user=request.user)
+            cart_item = cart.add_product(product, quantity)
 
-            serializer.save()
-            return Response(CartSerializer(cart).data)
-
-        except CartItem.DoesNotExist:
             return Response(
-                {'error': 'Item not found in cart'},
-                status=status.HTTP_404_NOT_FOUND
+                CartItemSerializer(cart_item).data,
+                status=status.HTTP_201_CREATED
             )
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class UpdateCartItemView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def put(self, request, item_id):
+        serializer = UpdateCartItemSerializer(data=request.data)
+        if serializer.is_valid():
+            quantity = serializer.validated_data['quantity']
+
+            cart_item = get_object_or_404(
+                CartItem,
+                id=item_id,
+                cart__user=request.user
+            )
+
+            # Проверка доступного количества
+            if cart_item.product.quantity < quantity:
+                return Response(
+                    {
+                        'error': 'Недостаточно товара на складе',
+                        'available_quantity': cart_item.product.quantity
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            cart_item.quantity = quantity
+            cart_item.save()
+
+            return Response(CartItemSerializer(cart_item).data)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class RemoveFromCartView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, item_id):
+        cart_item = get_object_or_404(
+            CartItem,
+            id=item_id,
+            cart__user=request.user
+        )
+
+        product_name = cart_item.product.name
+        cart_item.delete()
+
+        return Response(
+            {'detail': f'Товар "{product_name}" удален из корзины'},
+            status=status.HTTP_200_OK
+        )

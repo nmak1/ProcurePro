@@ -1,221 +1,135 @@
 from rest_framework import viewsets, status
-from rest_framework.decorators import api_view, permission_classes, action
+from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, IsAdminUser
-from rest_framework.views import APIView
-from .models import Supplier, SupplierContact
-from .serializers import (
-    SupplierSerializer, SupplierCreateSerializer, SupplierUpdateSerializer,
-    SupplierContactSerializer, SupplierContactCreateSerializer,
-    SupplierStatsSerializer, SupplierOrderSerializer
-)
+from rest_framework.permissions import IsAuthenticated
+from apps.suppliers.models import Supplier
+from apps.suppliers.serializers import SupplierSerializer
 
 
-class SupplierViewSet(viewsets.ModelViewSet):
-    """ViewSet для управления поставщиками"""
-    permission_classes = [IsAdminUser]  # Только администраторы могут управлять поставщиками
-    queryset = Supplier.objects.select_related('user').prefetch_related('contacts', 'products')
-
-    def get_serializer_class(self):
-        if self.action == 'create':
-            return SupplierCreateSerializer
-        elif self.action in ['update', 'partial_update']:
-            return SupplierUpdateSerializer
-        return SupplierSerializer
-
-    @action(detail=True, methods=['get'])
-    def stats(self, request, pk=None):
-        """Получение статистики поставщика"""
-        supplier = self.get_object()
-
-        # Статистика продуктов
-        total_products = supplier.products.count()
-        available_products = supplier.products.filter(is_available=True).count()
-
-        # Статистика заказов
-        from backend.apps.orders.models import OrderItem
-        order_items = OrderItem.objects.filter(supplier=supplier)
-        total_orders = order_items.values('order').distinct().count()
-        pending_orders = order_items.filter(order__status='pending').values('order').distinct().count()
-        completed_orders = order_items.filter(order__status='delivered').values('order').distinct().count()
-        total_revenue = sum(item.total_price for item in order_items.filter(order__status='delivered'))
-
-        stats_data = {
-            'total_products': total_products,
-            'available_products': available_products,
-            'total_orders': total_orders,
-            'pending_orders': pending_orders,
-            'completed_orders': completed_orders,
-            'total_revenue': total_revenue
-        }
-
-        serializer = SupplierStatsSerializer(stats_data)
-        return Response(serializer.data)
-
-    @action(detail=True, methods=['get'])
-    def orders(self, request, pk=None):
-        """Получение заказов поставщика"""
-        supplier = self.get_object()
-
-        from backend.apps.orders.models import OrderItem
-        order_items = OrderItem.objects.filter(
-            supplier=supplier
-        ).select_related('order', 'order__user', 'product')
-
-        orders_data = {}
-        for item in order_items:
-            order = item.order
-            if order.id not in orders_data:
-                orders_data[order.id] = {
-                    'order_number': order.order_number,
-                    'customer_email': order.user.email,
-                    'status': order.status,
-                    'total_amount': order.total_amount,
-                    'created_at': order.created_at,
-                    'items': []
-                }
-
-            orders_data[order.id]['items'].append({
-                'product_name': item.product.name,
-                'quantity': item.quantity,
-                'unit_price': str(item.unit_price),
-                'total_price': str(item.total_price)
-            })
-
-        serializer = SupplierOrderSerializer(list(orders_data.values()), many=True)
-        return Response(serializer.data)
+class SupplierViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = Supplier.objects.filter(is_active=True).prefetch_related('contacts', 'products')
+    serializer_class = SupplierSerializer
 
 
-class SupplierContactViewSet(viewsets.ModelViewSet):
-    """ViewSet для управления контактами поставщиков"""
-    permission_classes = [IsAdminUser]
-    serializer_class = SupplierContactSerializer
+class SupplierManagementViewSet(viewsets.ModelViewSet):
+    """API для управления поставщиками (только для поставщиков)"""
+    serializer_class = SupplierSerializer
+    permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return SupplierContact.objects.filter(supplier_id=self.kwargs['supplier_pk'])
+        # Только поставщики могут управлять своими данными
+        if hasattr(self.request.user, 'supplier_profile'):
+            return Supplier.objects.filter(user=self.request.user)
+        return Supplier.objects.none()
 
-    def get_serializer_class(self):
-        if self.action == 'create':
-            return SupplierContactCreateSerializer
-        return SupplierContactSerializer
+    @action(detail=False, methods=['get'])
+    def my_products(self, request):
+        """Получить товары поставщика"""
+        try:
+            supplier = request.user.supplier_profile
+            from apps.products.models import Product
+            from apps.products.serializers import ProductSerializer
 
-    def get_serializer_context(self):
-        context = super().get_serializer_context()
-        context['supplier_id'] = self.kwargs['supplier_pk']
-        return context
+            products = Product.objects.filter(supplier=supplier)
+            serializer = ProductSerializer(products, many=True)
+            return Response(serializer.data)
 
+        except Supplier.DoesNotExist:
+            return Response(
+                {'error': 'Профиль поставщика не найден'},
+                status=status.HTTP_404_NOT_FOUND
+            )
 
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def supplier_products(request):
-    """Получение товаров поставщика (для самого поставщика)"""
-    try:
-        supplier = request.user.supplier_profile
-        products = supplier.products.all()
-        from backend.apps.products.serializers import ProductSerializer
-        serializer = ProductSerializer(products, many=True)
-        return Response(serializer.data)
-    except Supplier.DoesNotExist:
-        return Response(
-            {'error': 'User is not a supplier'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+    @action(detail=False, methods=['post'])
+    def toggle_orders(self, request):
+        """Включить/выключить прием заказов"""
+        try:
+            supplier = request.user.supplier_profile
+            supplier.accepts_orders = not supplier.accepts_orders
+            supplier.save()
 
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def toggle_orders(request):
-    """Включение/выключение приема заказов"""
-    try:
-        supplier = request.user.supplier_profile
-        supplier.accepts_orders = not supplier.accepts_orders
-        supplier.save()
-        return Response({
-            'accepts_orders': supplier.accepts_orders,
-            'message': f'Order acceptance {"enabled" if supplier.accepts_orders else "disabled"}'
-        })
-    except Supplier.DoesNotExist:
-        return Response(
-            {'error': 'User is not a supplier'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def supplier_orders(request):
-    """Получение заказов поставщика (для самого поставщика)"""
-    try:
-        supplier = request.user.supplier_profile
-
-        # Получаем заказы, содержащие товары этого поставщика
-        from backend.apps.orders.models import OrderItem
-        order_items = OrderItem.objects.filter(
-            supplier=supplier
-        ).select_related('order', 'order__user', 'product')
-
-        orders_data = {}
-        for item in order_items:
-            order = item.order
-            if order.id not in orders_data:
-                orders_data[order.id] = {
-                    'order_number': order.order_number,
-                    'customer_email': order.user.email,
-                    'status': order.status,
-                    'total_amount': order.total_amount,
-                    'created_at': order.created_at,
-                    'items': []
-                }
-
-            orders_data[order.id]['items'].append({
-                'product_name': item.product.name,
-                'quantity': item.quantity,
-                'unit_price': str(item.unit_price),
-                'total_price': str(item.total_price)
+            status_text = 'включен' if supplier.accepts_orders else 'выключен'
+            return Response({
+                'detail': f'Прием заказов {status_text}',
+                'accepts_orders': supplier.accepts_orders
             })
 
-        return Response(list(orders_data.values()))
+        except Supplier.DoesNotExist:
+            return Response(
+                {'error': 'Профиль поставщика не найден'},
+                status=status.HTTP_404_NOT_FOUND
+            )
 
-    except Supplier.DoesNotExist:
-        return Response(
-            {'error': 'User is not a supplier'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+    @action(detail=False, methods=['get'])
+    def my_orders(self, request):
+        """Получить заказы с товарами поставщика"""
+        try:
+            supplier = request.user.supplier_profile
 
+            from apps.orders.models import OrderItem
+            from apps.orders.serializers import OrderItemSerializer
 
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def supplier_stats(request):
-    """Получение статистики поставщика (для самого поставщика)"""
-    try:
-        supplier = request.user.supplier_profile
+            # Получаем элементы заказов с товарами этого поставщика
+            order_items = OrderItem.objects.filter(
+                product__supplier=supplier
+            ).select_related('order', 'product', 'order__user')
 
-        # Статистика продуктов
-        total_products = supplier.products.count()
-        available_products = supplier.products.filter(is_available=True).count()
+            # Группируем по заказам
+            orders_data = {}
+            for item in order_items:
+                order_id = item.order.id
+                if order_id not in orders_data:
+                    orders_data[order_id] = {
+                        'order_id': order_id,
+                        'status': item.order.get_status_display(),
+                        'created_at': item.order.created_at,
+                        'total_amount': item.order.total_amount,
+                        'customer_email': item.order.user.email,
+                        'items': []
+                    }
+                orders_data[order_id]['items'].append({
+                    'product_name': item.product.name,
+                    'quantity': item.quantity,
+                    'price': item.price,
+                    'total_price': item.total_price
+                })
 
-        # Статистика заказов
-        from backend.apps.orders.models import OrderItem
-        order_items = OrderItem.objects.filter(supplier=supplier)
-        total_orders = order_items.values('order').distinct().count()
-        pending_orders = order_items.filter(order__status='pending').values('order').distinct().count()
-        completed_orders = order_items.filter(order__status='delivered').values('order').distinct().count()
-        total_revenue = sum(item.total_price for item in order_items.filter(order__status='delivered'))
+            return Response(list(orders_data.values()))
 
-        stats_data = {
-            'total_products': total_products,
-            'available_products': available_products,
-            'total_orders': total_orders,
-            'pending_orders': pending_orders,
-            'completed_orders': completed_orders,
-            'total_revenue': total_revenue
-        }
+        except Supplier.DoesNotExist:
+            return Response(
+                {'error': 'Профиль поставщика не найден'},
+                status=status.HTTP_404_NOT_FOUND
+            )
 
-        serializer = SupplierStatsSerializer(stats_data)
-        return Response(serializer.data)
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        """Статистика поставщика"""
+        try:
+            supplier = request.user.supplier_profile
 
-    except Supplier.DoesNotExist:
-        return Response(
-            {'error': 'User is not a supplier'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+            from apps.products.models import Product
+            from apps.orders.models import OrderItem
+
+            total_products = supplier.products.count()
+            available_products = supplier.products.filter(is_available=True).count()
+
+            # Статистика заказов
+            order_items = OrderItem.objects.filter(product__supplier=supplier)
+            total_orders = order_items.values('order').distinct().count()
+
+            # Выручка
+            total_revenue = sum(item.total_price for item in order_items)
+
+            return Response({
+                'total_products': total_products,
+                'available_products': available_products,
+                'total_orders': total_orders,
+                'total_revenue': total_revenue
+            })
+
+        except Supplier.DoesNotExist:
+            return Response(
+                {'error': 'Профиль поставщика не найден'},
+                status=status.HTTP_404_NOT_FOUND
+            )

@@ -1,11 +1,11 @@
 from rest_framework import serializers
-from .models import Supplier, SupplierContact
+from apps.suppliers.models import Supplier, SupplierContact
 
 
 class SupplierContactSerializer(serializers.ModelSerializer):
     class Meta:
         model = SupplierContact
-        fields = ['id', 'name', 'position', 'email', 'phone']
+        fields = ['id', 'name', 'position', 'email', 'phone', 'is_main']
 
 
 class SupplierSerializer(serializers.ModelSerializer):
@@ -14,19 +14,23 @@ class SupplierSerializer(serializers.ModelSerializer):
     user_first_name = serializers.CharField(source='user.first_name', read_only=True)
     user_last_name = serializers.CharField(source='user.last_name', read_only=True)
     products_count = serializers.SerializerMethodField()
+    active_products_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Supplier
         fields = [
             'id', 'user', 'user_email', 'user_first_name', 'user_last_name',
-            'name', 'type', 'email', 'phone', 'address',
-            'is_active', 'accepts_orders', 'contacts', 'products_count',
+            'name', 'description', 'type', 'address',
+            'is_active', 'accepts_orders', 'contacts', 'products_count', 'active_products_count',
             'created_at'
         ]
         read_only_fields = ['created_at']
 
     def get_products_count(self, obj):
-        return obj.products.count()
+        return obj.products_count
+
+    def get_active_products_count(self, obj):
+        return obj.active_products_count
 
 
 class SupplierCreateSerializer(serializers.ModelSerializer):
@@ -39,8 +43,8 @@ class SupplierCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Supplier
         fields = [
-            'name', 'type', 'email', 'phone', 'address',
-            'first_name', 'last_name', 'password'
+            'name', 'description', 'type', 'address',
+            'first_name', 'last_name', 'email', 'password'
         ]
 
     def create(self, validated_data):
@@ -60,7 +64,7 @@ class SupplierCreateSerializer(serializers.ModelSerializer):
             first_name=first_name,
             last_name=last_name,
             password=password,
-            is_supplier=True
+            user_type='supplier'
         )
 
         # Создаем поставщика
@@ -74,7 +78,7 @@ class SupplierUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Supplier
         fields = [
-            'name', 'type', 'email', 'phone', 'address',
+            'name', 'description', 'type', 'address',
             'is_active', 'accepts_orders'
         ]
 
@@ -84,7 +88,7 @@ class SupplierContactCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SupplierContact
-        fields = ['name', 'position', 'email', 'phone']
+        fields = ['name', 'position', 'email', 'phone', 'is_main']
 
     def create(self, validated_data):
         # Получаем supplier_id из контекста
@@ -109,7 +113,7 @@ class SupplierStatsSerializer(serializers.Serializer):
 
 class SupplierOrderSerializer(serializers.Serializer):
     """Сериализатор для заказов поставщика"""
-    order_number = serializers.CharField()
+    order_id = serializers.IntegerField()
     customer_email = serializers.CharField()
     status = serializers.CharField()
     total_amount = serializers.DecimalField(max_digits=10, decimal_places=2)

@@ -1,103 +1,127 @@
 from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
-from .models import Product, Category
-from .serializers import ProductSerializer, CategorySerializer
+from apps.products.models import Product, Category, ProductReview
+from apps.products.serializers import (
+    ProductSerializer, CategorySerializer, ProductListSerializer, ProductReviewSerializer
+)
 
 
-class ProductViewSet(viewsets.ModelViewSet):
-    queryset = Product.objects.select_related('supplier', 'category').prefetch_related(
-        'characteristics', 'images'
-    ).filter(is_available=True)
-    serializer_class = ProductSerializer
+class ProductViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = Product.objects.filter(is_available=True).select_related(
+        'category', 'supplier'
+    ).prefetch_related(
+        'characteristics', 'images', 'reviews'
+    )
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['category', 'supplier']
-    search_fields = ['name', 'description', 'supplier__name']
-    ordering_fields = ['price', 'name', 'created_at']
+    filterset_fields = ['category', 'supplier', 'is_featured', 'is_new']
+    search_fields = ['name', 'description', 'short_description', 'sku']
+    ordering_fields = ['price', 'created_at', 'name']
+    ordering = ['-created_at']
 
-    def get_queryset(self):
-        queryset = super().get_queryset()
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return ProductListSerializer
+        return ProductSerializer
 
-        # Фильтрация по минимальной цене
-        min_price = self.request.query_params.get('min_price')
-        if min_price:
-            queryset = queryset.filter(price__gte=min_price)
+    @action(detail=True, methods=['get'])
+    def similar(self, request, pk=None):
+        """Получить похожие товары"""
+        product = self.get_object()
+        similar_products = Product.objects.filter(
+            category=product.category,
+            is_available=True
+        ).exclude(id=product.id)[:8]
 
-        # Фильтрация по максимальной цене
-        max_price = self.request.query_params.get('max_price')
-        if max_price:
-            queryset = queryset.filter(price__lte=max_price)
-
-        return queryset
-
-    @action(detail=False, methods=['get'])
-    def by_category(self, request):
-        category_id = request.query_params.get('category_id')
-        if category_id:
-            products = self.queryset.filter(category_id=category_id)
-            serializer = self.get_serializer(products, many=True)
-            return Response(serializer.data)
-        return Response([])
+        serializer = ProductListSerializer(similar_products, many=True)
+        return Response(serializer.data)
 
     @action(detail=False, methods=['get'])
     def featured(self, request):
-        """Популярные товары"""
-        featured_products = self.queryset.order_by('-created_at')[:10]
-        serializer = self.get_serializer(featured_products, many=True)
-        return Response(serializer.data)
+        """Рекомендуемые товары"""
+        featured_products = Product.objects.filter(
+            is_featured=True,
+            is_available=True
+        )[:12]
 
-    @action(detail=True, methods=['post'])
-    def toggle_availability(self, request, pk=None):
-        """Переключение доступности товара (для поставщиков)"""
-        product = self.get_object()
-
-        # Проверяем, что пользователь - поставщик этого товара
-        if hasattr(request.user, 'supplier_profile') and product.supplier == request.user.supplier_profile:
-            product.is_available = not product.is_available
-            product.save()
-            return Response({
-                'status': 'success',
-                'is_available': product.is_available,
-                'message': f'Product availability set to {product.is_available}'
-            })
-        else:
-            return Response(
-                {'error': 'You do not have permission to modify this product'},
-                status=status.HTTP_403_FORBIDDEN
-            )
-
-
-class CategoryViewSet(viewsets.ModelViewSet):
-    queryset = Category.objects.prefetch_related('children', 'products')
-    serializer_class = CategorySerializer
-
-    @action(detail=True, methods=['get'])
-    def products(self, request, pk=None):
-        category = self.get_object()
-        products = category.products.filter(is_available=True)
-
-        # Пагинация
-        page = self.paginate_queryset(products)
-        if page is not None:
-            serializer = ProductSerializer(page, many=True)
-            return self.get_paginated_response(serializer.data)
-
-        serializer = ProductSerializer(products, many=True)
+        serializer = ProductListSerializer(featured_products, many=True)
         return Response(serializer.data)
 
     @action(detail=False, methods=['get'])
-    def tree(self, request):
-        """Возвращает дерево категорий"""
+    def new(self, request):
+        """Новые товары"""
+        new_products = Product.objects.filter(
+            is_new=True,
+            is_available=True
+        )[:12]
 
-        def get_category_tree(category):
-            return {
-                'id': category.id,
-                'name': category.name,
-                'description': category.description,
-                'children': [get_category_tree(child) for child in category.children.all()]
-            }
+        serializer = ProductListSerializer(new_products, many=True)
+        return Response(serializer.data)
 
-        root_categories = Category.objects.filter(parent__isnull=True)
-        tree_data = [get_category_tree(cat) for cat in root_categories]
-        return Response(tree_data)
+    @action(detail=True, methods=['get', 'post'])
+    def reviews(self, request, pk=None):
+        """Получить или добавить отзывы к товару"""
+        product = self.get_object()
+
+        if request.method == 'GET':
+            reviews = product.reviews.filter(is_approved=True)
+            serializer = ProductReviewSerializer(reviews, many=True)
+            return Response(serializer.data)
+
+        elif request.method == 'POST':
+            if not request.user.is_authenticated:
+                return Response(
+                    {'error': 'Требуется авторизация'},
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+
+            # Проверяем, не оставлял ли пользователь уже отзыв
+            if product.reviews.filter(user=request.user).exists():
+                return Response(
+                    {'error': 'Вы уже оставляли отзыв на этот товар'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            serializer = ProductReviewSerializer(data=request.data)
+            if serializer.is_valid():
+                serializer.save(product=product, user=request.user)
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = Category.objects.filter(is_active=True)
+    serializer_class = CategorySerializer
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['name', 'description']
+
+    @action(detail=True, methods=['get'])
+    def products(self, request, pk=None):
+        """Товары категории"""
+        category = self.get_object()
+        products = Product.objects.filter(
+            category=category,
+            is_available=True
+        )
+
+        page = self.paginate_queryset(products)
+        if page is not None:
+            serializer = ProductListSerializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = ProductListSerializer(products, many=True)
+        return Response(serializer.data)
+
+
+class ProductReviewViewSet(viewsets.ModelViewSet):
+    """ViewSet для управления отзывами"""
+    serializer_class = ProductReviewSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return ProductReview.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)

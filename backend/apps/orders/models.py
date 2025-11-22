@@ -13,44 +13,36 @@ class Order(models.Model):
     )
 
     user = models.ForeignKey(
-        'users.User',
+        'users.User',  # ← ПРАВИЛЬНО: 'app_label.ModelName'
         on_delete=models.CASCADE,
         related_name='orders',
-        verbose_name='Пользователь'
+        verbose_name=_('Пользователь')
     )
     status = models.CharField(
         max_length=20,
         choices=STATUS_CHOICES,
         default='pending',
-        verbose_name='Статус'
+        verbose_name=_('Статус')
     )
     total_amount = models.DecimalField(
         max_digits=10,
         decimal_places=2,
         default=0,
-        verbose_name='Общая сумма'
+        verbose_name=_('Общая сумма')
     )
-    shipping_address = models.TextField(verbose_name='Адрес доставки')
-    notes = models.TextField(blank=True, verbose_name='Примечания')
-    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Дата создания')
-    updated_at = models.DateTimeField(auto_now=True, verbose_name='Дата обновления')
+    shipping_address = models.TextField(verbose_name=_('Адрес доставки'))
+    notes = models.TextField(blank=True, verbose_name=_('Примечания'))
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name=_('Дата создания'))
+    updated_at = models.DateTimeField(auto_now=True, verbose_name=_('Дата обновления'))
 
     class Meta:
-        verbose_name = 'Заказ'
-        verbose_name_plural = 'Заказы'
+        verbose_name = _('Заказ')
+        verbose_name_plural = _('Заказы')
         ordering = ['-created_at']
+        db_table = 'orders'
 
     def __str__(self):
         return f"Заказ #{self.id} - {self.user.username}"
-
-    def calculate_total(self):
-        """Расчет общей суммы заказа"""
-        return sum(item.total_price for item in self.items.all())
-
-    def save(self, *args, **kwargs):
-        if not self.pk:  # Новый заказ
-            self.total_amount = self.calculate_total()
-        super().save(*args, **kwargs)
 
 
 class OrderItem(models.Model):
@@ -58,19 +50,20 @@ class OrderItem(models.Model):
         Order,
         on_delete=models.CASCADE,
         related_name='items',
-        verbose_name='Заказ'
+        verbose_name=_('Заказ')
     )
     product = models.ForeignKey(
-        'products.Product',
+        'products.Product',  # ← ПРАВИЛЬНО: 'app_label.ModelName'
         on_delete=models.CASCADE,
-        verbose_name='Товар'
+        verbose_name=_('Товар')
     )
-    quantity = models.PositiveIntegerField(verbose_name='Количество')
-    price = models.DecimalField(max_digits=10, decimal_places=2, verbose_name='Цена за единицу')
+    quantity = models.PositiveIntegerField(verbose_name=_('Количество'))
+    price = models.DecimalField(max_digits=10, decimal_places=2, verbose_name=_('Цена за единицу'))
 
     class Meta:
-        verbose_name = 'Элемент заказа'
-        verbose_name_plural = 'Элементы заказа'
+        verbose_name = _('Элемент заказа')
+        verbose_name_plural = _('Элементы заказа')
+        db_table = 'order_items'
 
     def __str__(self):
         return f"{self.product.name} x {self.quantity}"
@@ -78,9 +71,3 @@ class OrderItem(models.Model):
     @property
     def total_price(self):
         return self.quantity * self.price
-
-    def save(self, *args, **kwargs):
-        # Сохраняем цену на момент заказа
-        if not self.price:
-            self.price = self.product.price
-        super().save(*args, **kwargs)

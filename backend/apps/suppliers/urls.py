@@ -1,8 +1,13 @@
-from django.urls import path
-from .views import supplier_products, toggle_orders, supplier_orders
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+from apps.suppliers import views
+
+app_name = 'suppliers'
+
+router = DefaultRouter()
+router.register(r'suppliers', views.SupplierViewSet, basename='supplier')
+router.register(r'my-supplier', views.SupplierManagementViewSet, basename='supplier-management')
 
 urlpatterns = [
-    path('products/', supplier_products, name='supplier-products'),
-    path('toggle-orders/', toggle_orders, name='toggle-orders'),
-    path('orders/', supplier_orders, name='supplier-orders'),
+    path('', include(router.urls)),
 ]
